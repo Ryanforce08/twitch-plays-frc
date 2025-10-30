@@ -1,7 +1,7 @@
-import socket
 import time
 import threading
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
+from ntcore import NetworkTableInstance, NetworkTableEntry
 
 class SmartNT:
     def __init__(
@@ -160,7 +160,7 @@ class SmartNT:
             return self.get(key, val_or_default)
 
 class NetworkTableHandler:
-    def __init__(self, table_name='SmartDashboard',command_map, command_duration=COMMAND_DURATION):
+    def __init__(self, table_name='SmartDashboard',command_map: dict = {}, command_duration: float = 1.0):
         self.smart_nt = SmartNT(root_table=table_name, verbose=True)
         self.smart_nt.start()
         self.command_duration = command_duration
@@ -168,15 +168,9 @@ class NetworkTableHandler:
         self.lock = threading.Lock()
         
         # Command mapping: command -> (key, value, reset_value)
-        self.command_map = 
-        self.smart_nt.put('LeftY', 0.0)
-        self.smart_nt.put('LeftX', 0.0)
-        self.smart_nt.put('RightX', 0.0)
-        self.smart_nt.put('L4', False)
-        self.smart_nt.put('L3', False)
-        self.smart_nt.put('L2', False)
-        self.smart_nt.put('L1', False)
-        self.smart_nt.put('Intake', False)
+        self.command_map = command_map
+        for cmd, (key, value, reset_value) in command_map.items():
+            self.smart_nt.put(key, reset_value)  # Initialize to reset value
 
     def set_temporary_value(self, key: str, value: Any, reset_value: Any):
         """Set a value temporarily, then reset it after duration"""
@@ -202,7 +196,7 @@ class NetworkTableHandler:
             if key in self.active_timers:
                 del self.active_timers[key]
 
-    def process_command(self, username: str, message: str):
+    def process_temp_command(self, username: str, message: str):
         """Process a chat message as a command"""
         # Convert to lowercase and strip whitespace
         command = message.lower().strip()
@@ -213,6 +207,36 @@ class NetworkTableHandler:
             self.set_temporary_value(key, value, reset_value)
             print(f"[{username}] executed: {command}")
         # You can add more complex parsing here if needed
+    
+    def process_until_command(self, username: str, message: str, until_key: str):
+        """Process a command that lasts until a condition is met"""
+        # Convert to lowercase and strip whitespace
+        command = message.lower().strip()
+        
+        # Check if it's a valid command
+        if command in self.command_map:
+            key, value, reset_value = self.command_map[command]
+            # Activate the command
+            self.smart_nt.put(key, value)
+            print(f"[{username}] executed: {command} (until condition met)")
+            
+            def monitor_condition():
+                # Wait for the condition to become True
+                while True:
+                    try:
+                        if self.smart_nt.get_boolean(until_key, False):
+                            # Condition met -> reset once, then wait the duration
+                            with self.lock:
+                                self.smart_nt.put(key, reset_value)
+                            print(f"[Command] Reset {key} = {reset_value} (condition met)")
+                            time.sleep(self.command_duration)
+                            break
+                    except Exception as e:
+                        if self.smart_nt.verbose:
+                            print(f"[SmartNT] monitor_condition error for '{until_key}': {e}")
+                    time.sleep(0.2)  # Polling interval
+            
+            threading.Thread(target=monitor_condition, daemon=True).start()
 
     def cancel_all(self):
         """Cancel all active timers"""
