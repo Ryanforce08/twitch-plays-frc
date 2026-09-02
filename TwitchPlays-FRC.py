@@ -1,91 +1,73 @@
-from twitchchat import Twitch,YouTube
-from networktable import NetworkTableHandler
-import time
 import concurrent.futures
+import sys
+import time
+
 import keyboard
 import pyautogui
 
+from networktable import NetworkTableHandler
+from twitchchat import Twitch
+
 # Configuration
-TWITCH_CHANNEL = 'ryanforce_'  # Change this to your desired channel (without #)
+TWITCH_CHANNEL = "ryanforce_"  # Change this to your desired channel (without #)
 COMMAND_DURATION = 1.0  # Duration in seconds to hold each command
 
 # MESSAGE_RATE controls how fast we process incoming Twitch Chat messages. It's the number of seconds it will take to handle all messages in the queue.
 # This is used because Twitch delivers messages in "batches", rather than one at a time. So we process the messages over MESSAGE_RATE duration, rather than processing the entire batch at once.
-# A smaller number means we go through the message queue faster, but we will run out of messages faster and activity might "stagnate" while waiting for a new batch. 
+# A smaller number means we go through the message queue faster, but we will run out of messages faster and activity might "stagnate" while waiting for a new batch.
 # A higher number means we go through the queue slower, and messages are more evenly spread out, but delay from the viewers' perspective is higher.
 # You can set this to 0 to disable the queue and handle all messages immediately. However, then the wait before another "batch" of messages is more noticeable.
 MESSAGE_RATE = 0.5
-# MAX_QUEUE_LENGTH limits the number of commands that will be processed in a given "batch" of messages. 
+# MAX_QUEUE_LENGTH limits the number of commands that will be processed in a given "batch" of messages.
 # e.g. if you get a batch of 50 messages, you can choose to only process the first 10 of them and ignore the others.
 # This is helpful for games where too many inputs at once can actually hinder the gameplay.
 # Setting to ~50 is good for total chaos, ~5-10 is good for 2D platformers
 MAX_QUEUE_LENGTH = 20
-MAX_WORKERS = 100 # Maximum number of threads you can process at a time 
-
+MAX_WORKERS = 100  # Maximum number of threads you can process at a time
 
 
 class TwitchToNetworkTables:
     def __init__(self, channel=TWITCH_CHANNEL, command_duration=COMMAND_DURATION):
+
         commands = {
-            'forward': ('LeftY', 1.0, 0.0),
-            'backward': ('LeftY', -1.0, 0.0),
-            'back': ('LeftY', -1.0, 0.0),
-            'left': ('LeftX', -1.0, 0.0),
-            'right': ('LeftX', 1.0, 0.0),
-            'l': ('RightX', -1.0, 0.0),
-            'r': ('RightX', 1.0, 0.0),
-            'l4': ('L4', True, False),
-            'l3': ('L3', True, False),
-            'l2': ('L2', True, False),
-            'l1': ('L1', True, False),
-            'intake': ('Intake', True, False),
-            'stop': ('LeftY', 0.0, 0.0),  # Emergency stop
+            # Twitch     key     set  reset
+            "forward": ("LeftY", 1.0, 0.0),
+            "backward": ("LeftY", -1.0, 0.0),
+            "back": ("LeftY", -1.0, 0.0),
+            "left": ("LeftX", -1.0, 0.0),
+            "right": ("LeftX", 1.0, 0.0),
+            "turnl": ("RightX", -1.0, 0.0),
+            "turnr": ("RightX", 1.0, 0.0),
+            "stop": ("LeftY", 0.0, 0.0),  # Emergency stop
+            "shoot": ("Shoot", True, False),
+            "intake": ("Intake", True, False),
         }
         self.monitor = Twitch()
         self.monitor.twitch_connect(channel)
-        self.handler = NetworkTableHandler(command_map=commands, command_duration=command_duration)
+        self.handler = NetworkTableHandler(
+            command_map=commands, command_duration=command_duration
+        )
 
         self.last_time = time.time()
         self.message_queue = []
-        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=MAX_WORKERS
+        )
         self.active_tasks = []
         pyautogui.FAILSAFE = False
         self.until_key = "setpoint"
-    
 
     def handle_message(self, message):
         try:
-            msg = message['message'].lower()
-            username = message['username'].lower()
+            msg = message["message"].lower()
+            username = message["username"].lower()
 
             print("Got this message from " + username + ": " + msg)
 
-            match msg:
-                case "forward":
-                    self.handler.process_temp_command(username, msg)
-                case "backward":
-                    self.handler.process_temp_command(username, msg)
-                case "back":
-                    self.handler.process_temp_command(username, msg)
-                case "left":
-                    self.handler.process_temp_command(username, msg)
-                case "right":
-                    self.handler.process_temp_command(username, msg)
-                case "l":
-                    self.handler.process_temp_command(username, msg)
-                case "r":
-                    self.handler.process_temp_command(username, msg)
-                case "stop":
-                    self.handler.process_temp_command(username, msg)
-                case "l4":
-                    self.handler.process_temp_command(username, msg)
-                case "l3":
-                    self.handler.process_temp_command(username, msg)
-                case "l2":
-                    self.handler.process_temp_command(username, msg)
-                case "l1":
-                    self.handler.process_temp_command(username, msg)
-
+            if msg == "intake" or msg == "shoot":
+                self.handler.process_temp_command(username, msg, 5.0)
+            elif msg in self.handler.command_map:
+                self.handler.process_temp_command(username, msg)
 
         except Exception as e:
             print("Encountered exception: " + str(e))
@@ -101,11 +83,14 @@ class TwitchToNetworkTables:
         while True:
             self.active_tasks = [t for t in self.active_tasks if not t.done()]
 
-            #Check for new messages
-            new_messages = self.monitor.twitch_receive_messages();
+            # Check for new messages
+            new_messages = self.monitor.twitch_receive_messages()
             if new_messages:
-                self.message_queue += new_messages; # New messages are added to the back of the queue
-                self.message_queue = self.message_queue[-MAX_QUEUE_LENGTH:] # Shorten the queue to only the most recent X messages
+                self.message_queue += new_messages
+                # New messages are added to the back of the queue
+                self.message_queue = self.message_queue[
+                    -MAX_QUEUE_LENGTH:
+                ]  # Shorten the queue to only the most recent X messages
 
             messages_to_handle = []
             if not self.message_queue:
@@ -113,7 +98,11 @@ class TwitchToNetworkTables:
                 self.last_time = time.time()
             else:
                 # Determine how many messages we should handle now
-                r = 1 if MESSAGE_RATE == 0 else (time.time() - self.last_time) / MESSAGE_RATE
+                r = (
+                    1
+                    if MESSAGE_RATE == 0
+                    else (time.time() - self.last_time) / MESSAGE_RATE
+                )
                 n = int(r * len(self.message_queue))
                 if n > 0:
                     # Pop the messages we want off the front of the queue
@@ -122,18 +111,22 @@ class TwitchToNetworkTables:
                     self.last_time = time.time()
 
             # If user presses Shift+Backspace, automatically end the program
-            if keyboard.is_pressed('shift+backspace'):
-                exit()
+            if keyboard.is_pressed("shift+backspace"):
+                sys.exit()
 
             if not messages_to_handle:
                 continue
             else:
                 for message in messages_to_handle:
                     if len(self.active_tasks) <= MAX_WORKERS:
-                        self.active_tasks.append(self.thread_pool.submit(self.handle_message, message))
+                        self.active_tasks.append(
+                            self.thread_pool.submit(self.handle_message, message)
+                        )
                     else:
-                        print(f'WARNING: active tasks ({len(self.active_tasks)}) exceeds number of workers ({MAX_WORKERS}). ({len(self.message_queue)} messages in the queue)')
- 
+                        print(
+                            f"WARNING: active tasks ({len(self.active_tasks)}) exceeds number of workers ({MAX_WORKERS}). ({len(self.message_queue)} messages in the queue)"
+                        )
+
 
 if __name__ == "__main__":
     bridge = TwitchToNetworkTables()
